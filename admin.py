@@ -815,7 +815,7 @@ function processLocal() {
   if (!path) { alert('Укажите путь к файлу'); return; }
   let url = '/api/run/local?path='+enc(path);
   if (server) url += '&server='+server;
-  streamSSE(url, 'Local: '+path.split(/[/\\]/).pop());
+  streamSSE(url, 'Local: '+path.split(/[\\\\/]/).pop());
 }
 function fetchByName() {
   const name = document.getElementById('p-fetch-name').value.trim();
@@ -838,7 +838,7 @@ function closeDetail() {
 // ═══════════════════════════════════════════════════════════════════
 // UTILS
 // ═══════════════════════════════════════════════════════════════════
-const esc = s => s.replace(/\\\\/g,'\\\\').replace(/"/g,'&quot;').replace(/'/g,"\\'");
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const enc = s => encodeURIComponent(s);
 const shortName = s => s.replace('.pbo.7z','').split('.').slice(0,2).join('.');
 
