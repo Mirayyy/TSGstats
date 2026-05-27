@@ -8,6 +8,9 @@ venv/
 # Pipeline output (временные файлы обработки)
 output/
 
+# Локально скачанные архивы для отладки
+fetched/
+
 # Secrets
 .env
 *.env
