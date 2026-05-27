@@ -69,6 +69,29 @@ def _sb_raise(resp) -> None:
         raise RuntimeError(f"Supabase {resp.status_code}: {body}")
 
 
+# ── API: stats overview ───────────────────────────────────────────────────────
+
+@app.get("/api/stats")
+def api_stats():
+    url, headers = _sb_client()
+    ch = {**headers, "Prefer": "count=exact"}
+
+    def count(table, params=None):
+        r = client.get(f"/rest/v1/{table}",
+                       params={"select": "*", "limit": "0", **(params or {})},
+                       headers=ch)
+        cr = r.headers.get("Content-Range", "*/0")
+        return int(cr.split("/")[-1]) if "/" in cr else 0
+
+    with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
+        return jsonify({
+            "games":         count("games"),
+            "players":       count("players"),
+            "processed_ok":  count("processed_replays", {"status": "eq.ok"}),
+            "processed_err": count("processed_replays", {"status": "eq.error"}),
+        })
+
+
 # ── API: archives ─────────────────────────────────────────────────────────────
 
 @app.get("/api/archives")
@@ -146,6 +169,60 @@ def api_delete_game(game_id):
     return jsonify({"ok": True})
 
 
+# ── API: players ─────────────────────────────────────────────────────────────
+
+@app.get("/api/players")
+def api_players():
+    url, headers = _sb_client()
+    with httpx.Client(base_url=url, headers=headers, timeout=15) as client:
+        players_resp = client.get("/rest/v1/players", params={
+            "select": "steam_id,display_name,updated_at",
+            "order":  "display_name.asc",
+            "limit":  "1000",
+        })
+        _sb_raise(players_resp)
+        lb_resp = client.get("/rest/v1/leaderboard", params={
+            "select": "steam_id,games_played",
+        })
+    lb_map = {r["steam_id"]: r["games_played"] for r in (lb_resp.json() if lb_resp.is_success else [])}
+    players = players_resp.json()
+    for p in players:
+        p["games_count"] = lb_map.get(p["steam_id"], 0)
+    return jsonify(players)
+
+
+@app.patch("/api/players/<steam_id>")
+def api_update_player(steam_id):
+    data = request.get_json() or {}
+    display_name = data.get("display_name", "").strip()
+    if not display_name:
+        return jsonify({"error": "display_name required"}), 400
+    url, headers = _sb_client()
+    with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
+        resp = client.patch(
+            "/rest/v1/players",
+            params={"steam_id": f"eq.{steam_id}"},
+            json={"display_name": display_name,
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        _sb_raise(resp)
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/players/<steam_id>")
+def api_delete_player(steam_id):
+    """Удаляет игрока и все его записи статистики (FK без CASCADE)."""
+    url, headers = _sb_client()
+    with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
+        stats = client.delete("/rest/v1/player_game_stats",
+                              params={"steam_id": f"eq.{steam_id}"})
+        _sb_raise(stats)
+        player = client.delete("/rest/v1/players",
+                               params={"steam_id": f"eq.{steam_id}"})
+        _sb_raise(player)
+    return jsonify({"ok": True})
+
+
 # ── API: processed_replays ────────────────────────────────────────────────────
 
 @app.get("/api/processed")
@@ -177,6 +254,27 @@ def api_delete_processed(filename):
     with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
         resp = client.delete("/rest/v1/processed_replays",
                              params={"filename": f"eq.{filename}"})
+        _sb_raise(resp)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/processed")
+def api_mark_processed():
+    """Вручную отмечает архив как обработанный (для случаев после --local)."""
+    data = request.get_json() or {}
+    filename = data.get("filename", "").strip()
+    status   = data.get("status", "ok")
+    if not filename:
+        return jsonify({"error": "filename required"}), 400
+    url, headers = _sb_client()
+    with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
+        resp = client.post(
+            "/rest/v1/processed_replays",
+            json={"filename": filename,
+                  "processed_at": datetime.now(timezone.utc).isoformat(),
+                  "status": status},
+            headers={**headers, "Prefer": "resolution=merge-duplicates"},
+        )
         _sb_raise(resp)
     return jsonify({"ok": True})
 
@@ -241,52 +339,77 @@ def api_run_local():
     return _stream(cmd)
 
 
+def _fetch_process_gen(archive: str):
+    """Генератор SSE: скачать архив → обработать."""
+    base = os.path.dirname(__file__)
+
+    yield f"data: {json.dumps('── Шаг 1: скачиваем архив ──')}\n\n"
+    p1 = subprocess.Popen(
+        [sys.executable, "pipeline.py", "--fetch", archive, "--out", "fetched"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, cwd=base,
+    )
+    log_path = None
+    for line in iter(p1.stdout.readline, ""):
+        yield f"data: {json.dumps(line.rstrip())}\n\n"
+        if "log.txt сохранён:" in line:
+            log_path = line.split("log.txt сохранён:")[-1].strip()
+    p1.wait()
+
+    if p1.returncode != 0 or not log_path:
+        yield f"data: {json.dumps({'__done__': True, 'code': 1})}\n\n"
+        return
+
+    yield f"data: {json.dumps('── Шаг 2: обрабатываем ──')}\n\n"
+    p2 = subprocess.Popen(
+        [sys.executable, "pipeline.py", "--local", log_path],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, cwd=base,
+    )
+    for line in iter(p2.stdout.readline, ""):
+        yield f"data: {json.dumps(line.rstrip())}\n\n"
+    p2.wait()
+    yield f"data: {json.dumps({'__done__': True, 'code': p2.returncode})}\n\n"
+
+
+def _sse(gen):
+    return Response(stream_with_context(gen),
+                    content_type="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
 @app.get("/api/run/fetch-process")
 def api_run_fetch_process():
-    """Скачивает архив и сразу обрабатывает — двухшаговый SSE стрим."""
+    """Скачивает архив и сразу обрабатывает."""
+    archive = request.args.get("archive", "")
+    if not archive:
+        return jsonify({"error": "archive required"}), 400
+    return _sse(_fetch_process_gen(archive))
+
+
+@app.get("/api/run/reprocess")
+def api_run_reprocess():
+    """Переобработка: сбросить статус в processed_replays → скачать → обработать."""
     archive = request.args.get("archive", "")
     if not archive:
         return jsonify({"error": "archive required"}), 400
 
     def generate():
-        safe = archive.replace(".pbo.7z", "")
-        dest = os.path.join(os.path.dirname(__file__), "fetched", safe)
-
-        # Шаг 1: fetch
-        yield f"data: {json.dumps('── Шаг 1: скачиваем архив ──')}\n\n"
-        p1 = subprocess.Popen(
-            [sys.executable, "pipeline.py", "--fetch", archive, "--out", "fetched"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, cwd=os.path.dirname(__file__),
-        )
-        log_path = None
-        for line in iter(p1.stdout.readline, ""):
-            yield f"data: {json.dumps(line.rstrip())}\n\n"
-            if "log.txt сохранён:" in line:
-                log_path = line.split("log.txt сохранён:")[-1].strip()
-        p1.wait()
-
-        if p1.returncode != 0 or not log_path:
+        yield f"data: {json.dumps('── Сброс статуса ──')}\n\n"
+        try:
+            url, headers = _sb_client()
+            with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
+                resp = client.delete("/rest/v1/processed_replays",
+                                     params={"filename": f"eq.{archive}"})
+                _sb_raise(resp)
+            yield f"data: {json.dumps('Запись удалена из processed_replays')}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps(f'ОШИБКА сброса: {e}')}\n\n"
             yield f"data: {json.dumps({'__done__': True, 'code': 1})}\n\n"
             return
+        yield from _fetch_process_gen(archive)
 
-        # Шаг 2: process
-        yield f"data: {json.dumps('── Шаг 2: обрабатываем ──')}\n\n"
-        p2 = subprocess.Popen(
-            [sys.executable, "pipeline.py", "--local", log_path],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, cwd=os.path.dirname(__file__),
-        )
-        for line in iter(p2.stdout.readline, ""):
-            yield f"data: {json.dumps(line.rstrip())}\n\n"
-        p2.wait()
-        yield f"data: {json.dumps({'__done__': True, 'code': p2.returncode})}\n\n"
-
-    return Response(
-        stream_with_context(generate()),
-        content_type="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
+    return _sse(generate())
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -426,6 +549,16 @@ select.filter{background:var(--surface2);border:1px solid var(--border);color:va
 .kd-badge{background:var(--surface2);border-radius:4px;padding:2px 7px;font-size:11px;
           font-family:monospace;color:var(--muted)}
 .kd-badge b{color:var(--text)}
+
+/* inline edit */
+.edit-inp{background:var(--surface2);border:1px solid var(--blue);color:var(--text);
+          padding:4px 8px;border-radius:4px;font-size:13px;outline:none;width:200px}
+
+/* db stats */
+.db-stats{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap}
+.db-stat{background:var(--surface);border:1px solid var(--border);border-radius:6px;
+         padding:10px 16px;font-size:12px;color:var(--muted);white-space:nowrap}
+.db-stat b{color:var(--text);font-size:18px;display:block;margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -444,6 +577,9 @@ select.filter{background:var(--surface2);border:1px solid var(--border);color:va
     </div>
     <div class="nav-item" data-tab="games" onclick="showTab('games')">
       🎮 Игры
+    </div>
+    <div class="nav-item" data-tab="players" onclick="showTab('players')">
+      👥 Игроки
     </div>
     <div class="nav-item" data-tab="processed" onclick="showTab('processed')">
       ✅ Обработанные
@@ -484,6 +620,7 @@ let currentTab = '';
 let currentSSE = null;
 let allArchives = [];
 let allGames = [];
+let allPlayers = [];
 
 // ═══════════════════════════════════════════════════════════════════
 // TERMINAL
@@ -548,6 +685,7 @@ function showTab(tab) {
   closeDetail();
   if (tab === 'archives') loadArchives();
   else if (tab === 'games')     loadGames();
+  else if (tab === 'players')   loadPlayers();
   else if (tab === 'processed') loadProcessed();
   else if (tab === 'pipeline')  renderPipeline();
 }
@@ -557,7 +695,7 @@ function showTab(tab) {
 // ═══════════════════════════════════════════════════════════════════
 async function loadArchives() {
   document.getElementById('content').innerHTML = '<div class="loading">Загружаем список с сайта…</div>';
-  const r = await fetch('/api/archives');
+  const [r] = await Promise.all([fetch('/api/archives'), ]);
   const data = await r.json();
   if (!r.ok) {
     document.getElementById('content').innerHTML =
@@ -566,6 +704,7 @@ async function loadArchives() {
   }
   allArchives = data;
   renderArchives();
+  loadDbStats();
 }
 
 function renderArchives() {
@@ -581,6 +720,7 @@ function renderArchives() {
   const pend = allArchives.length - cnt('ok') - cnt('error');
 
   document.getElementById('content').innerHTML = `
+    <div id="db-stats-bar" class="db-stats"></div>
     <div class="stats-grid">
       <div class="stat"><div class="stat-val">${allArchives.length}</div><div class="stat-lbl">Всего архивов</div></div>
       <div class="stat"><div class="stat-val" style="color:var(--green)">${cnt('ok')}</div><div class="stat-lbl">Обработано</div></div>
@@ -609,9 +749,15 @@ function renderArchives() {
           const badge = {ok:'b-ok',error:'b-err',pending:'b-pend'}[a.status]||'b-pend';
           const fn = esc(a.filename);
           const actions = [];
-          if (a.status !== 'ok')
-            actions.push(`<button class="btn btn-sm btn-primary" onclick='fetchAndProcess("${fn}")' title="Скачать и обработать">▶</button>`);
-          actions.push(`<button class="btn btn-sm" onclick='fetchOnly("${fn}")' title="Только скачать">⬇</button>`);
+          if (a.status === 'pending')
+            actions.push(`<button class="btn btn-sm btn-primary" onclick='fetchAndProcess("${fn}")' title="Скачать и обработать">▶ Обработать</button>`);
+          if (a.status === 'ok')
+            actions.push(`<button class="btn btn-sm" onclick='reprocess("${fn}")' title="Переобработать заново">↺ Reprocess</button>`);
+          if (a.status === 'error')
+            actions.push(`<button class="btn btn-sm btn-primary" onclick='fetchAndProcess("${fn}")' title="Скачать и обработать снова">▶ Retry</button>`);
+          actions.push(`<button class="btn btn-sm btn-ghost" onclick='fetchOnly("${fn}")' title="Только скачать log.txt">⬇</button>`);
+          if (a.status === 'pending')
+            actions.push(`<button class="btn btn-sm" onclick='markOk("${fn}")' title="Отметить как обработанный вручную">✓ Mark OK</button>`);
           if (a.status !== 'pending')
             actions.push(`<button class="btn btn-sm btn-danger" onclick='removePending("${fn}")' title="Сбросить статус">✕</button>`);
           return `<tr>
@@ -635,9 +781,38 @@ function fetchAndProcess(archive) {
     'Fetch+Process: '+shortName(archive),
     ok => { if(ok) loadArchives(); });
 }
+function reprocess(archive) {
+  if (!confirm('Переобработать архив заново? Данные игры будут перезаписаны.')) return;
+  streamSSE('/api/run/reprocess?archive='+enc(archive),
+    'Reprocess: '+shortName(archive),
+    ok => { if(ok) loadArchives(); });
+}
 async function removePending(filename) {
   await fetch('/api/processed/'+enc(filename), {method:'DELETE'});
   await loadArchives();
+}
+async function markOk(filename) {
+  await fetch('/api/processed', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename, status:'ok'}),
+  });
+  await loadArchives();
+}
+
+// DB stats strip above archives
+async function loadDbStats() {
+  const r = await fetch('/api/stats');
+  if (!r.ok) return;
+  const s = await r.json();
+  const el = document.getElementById('db-stats-bar');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="db-stat"><b>${s.games}</b>Игр в БД</div>
+    <div class="db-stat"><b>${s.players}</b>Игроков</div>
+    <div class="db-stat" style="color:var(--green)"><b>${s.processed_ok}</b>Обработано OK</div>
+    ${s.processed_err > 0 ? `<div class="db-stat" style="color:var(--red)"><b>${s.processed_err}</b>Ошибок</div>` : ''}
+  `;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -861,6 +1036,96 @@ function fetchByName() {
   const name = document.getElementById('p-fetch-name').value.trim();
   if (!name) { alert('Укажите имя архива'); return; }
   fetchOnly(name);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PLAYERS TAB
+// ═══════════════════════════════════════════════════════════════════
+async function loadPlayers() {
+  document.getElementById('content').innerHTML = '<div class="loading">Загружаем игроков…</div>';
+  const r = await fetch('/api/players');
+  const data = await r.json();
+  if (!r.ok) {
+    document.getElementById('content').innerHTML =
+      `<div class="empty" style="color:var(--red)">Ошибка: ${data.error || r.status}</div>`;
+    return;
+  }
+  allPlayers = data;
+  renderPlayers();
+}
+
+function renderPlayers() {
+  const search = (document.getElementById('pl-search')?.value || '').toLowerCase();
+  const list = allPlayers.filter(p =>
+    !search || p.display_name.toLowerCase().includes(search) ||
+    p.steam_id.toLowerCase().includes(search)
+  );
+
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar">
+      <input class="search" id="pl-search" placeholder="Поиск по имени или Steam ID…"
+             oninput="renderPlayers()" value="${search}">
+      <div class="spacer"></div>
+      <span style="font-size:12px;color:var(--muted)">${list.length} игроков</span>
+      <button class="btn" onclick="loadPlayers()">↺</button>
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th>Имя</th><th>Steam ID</th><th style="text-align:center">Игр</th><th style="width:100px"></th>
+      </tr></thead>
+      <tbody>
+        ${list.map(p => {
+          const sid = enc(p.steam_id);
+          const nm  = esc(p.display_name);
+          return `<tr id="prow-${sid}">
+            <td id="pname-${sid}">${nm}</td>
+            <td class="mono">${p.steam_id}</td>
+            <td style="text-align:center;color:var(--muted)">${p.games_count ?? 0}</td>
+            <td style="white-space:nowrap;display:flex;gap:4px">
+              <button class="btn btn-sm" onclick='editPlayer("${sid}","${nm}")' title="Редактировать имя">✎</button>
+              <button class="btn btn-sm btn-danger" onclick='deletePlayer("${sid}")' title="Удалить игрока и всю статистику">✕</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function editPlayer(steamId, currentName) {
+  const cell = document.getElementById('pname-' + steamId);
+  if (!cell) return;
+  cell.innerHTML = `
+    <input class="edit-inp" id="einp-${steamId}"
+           value="${currentName}"
+           onkeydown="if(event.key==='Enter')savePlayer('${steamId}');if(event.key==='Escape')loadPlayers()">
+    <button class="btn btn-sm btn-primary" onclick="savePlayer('${steamId}')">✓</button>
+    <button class="btn btn-sm" onclick="loadPlayers()">✕</button>
+  `;
+  document.getElementById('einp-' + steamId)?.focus();
+}
+
+async function savePlayer(steamId) {
+  const inp = document.getElementById('einp-' + steamId);
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) return;
+  const r = await fetch('/api/players/' + enc(steamId), {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({display_name: name}),
+  });
+  const data = await r.json();
+  if (!r.ok) { tLog('Ошибка: ' + (data.error || r.status), 'err'); return; }
+  await loadPlayers();
+}
+
+async function deletePlayer(steamId) {
+  if (!confirm('Удалить игрока и ВСЮ его статистику во всех играх?')) return;
+  const r = await fetch('/api/players/' + enc(steamId), {method: 'DELETE'});
+  const data = await r.json();
+  if (!r.ok) { alert('Ошибка: ' + (data.error || r.status)); return; }
+  await loadPlayers();
 }
 
 // ═══════════════════════════════════════════════════════════════════
