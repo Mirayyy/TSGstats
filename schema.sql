@@ -50,4 +50,9 @@ CREATE POLICY "public read players"
 CREATE POLICY "public read stats"
     ON player_game_stats FOR SELECT USING (true);
 
+-- Разрешаем читать через anon-ключ (фронтенд)
+GRANT SELECT ON public.games             TO anon, authenticated;
+GRANT SELECT ON public.players           TO anon, authenticated;
+GRANT SELECT ON public.player_game_stats TO anon, authenticated;
+
 -- Запись только через service_role (GitHub Actions) — RLS не применяется к нему
