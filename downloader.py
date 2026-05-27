@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import os
 import re
-import struct
+import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import httpx
 import py7zr
@@ -99,130 +98,14 @@ def mark_processed(filename: str, status: str = "ok") -> None:
         print(f"  WARNING: не удалось отметить {filename} как обработанный: {e}")
 
 
-# ── ArmA LZSS декомпрессор ────────────────────────────────────────────────────
-
-def _lzss_decompress(data: bytes, orig_size: int) -> bytes:
-    """
-    Декомпрессия ArmA LZSS (packing=0x43707273).
-    Управляющий байт: каждый бит (LSB→MSB) задаёт тип следующего блока:
-      1 = literal byte
-      0 = back-reference: 2 байта → (length = b2 & 0xF + 3, offset = b1 | (b2>>4)<<8)
-    """
-    result = bytearray()
-    pos = 0
-
-    while len(result) < orig_size and pos < len(data):
-        ctrl = data[pos]
-        pos += 1
-
-        for bit in range(8):
-            if len(result) >= orig_size or pos >= len(data):
-                break
-
-            if ctrl & (1 << bit):
-                # Literal
-                result.append(data[pos])
-                pos += 1
-            else:
-                # Back-reference
-                if pos + 1 >= len(data):
-                    break
-                b1, b2 = data[pos], data[pos + 1]
-                pos += 2
-
-                length = (b2 & 0x0F) + 3
-                offset = b1 | ((b2 & 0xF0) << 4)
-
-                if offset == 0:
-                    break
-
-                start = len(result) - offset
-                for j in range(length):
-                    idx = start + j
-                    result.append(result[idx] if idx >= 0 else 0)
-                    if len(result) >= orig_size:
-                        break
-
-    return bytes(result)
-
-
-# ── PBO парсер ────────────────────────────────────────────────────────────────
-
-CPRS_MAGIC = 0x43707273  # packing = compressed
-VERS_MAGIC = 0x56657273  # packing = version entry
-
-
-def _extract_log_from_pbo(pbo_path: str, output_dir: str) -> str | None:
-    """
-    Извлекает log.txt из .pbo файла (формат архива ArmA/Bohemia).
-
-    Структура PBO:
-      [version entry (опц.)] → [file entries...] → [boundary entry] → [raw file data]
-    Каждый entry: null-term name + 5×uint32 (packing, orig_size, reserved, timestamp, data_size)
-    """
-    with open(pbo_path, "rb") as f:
-        raw = f.read()
-
-    pos = 0
-    entries: list[tuple[str, int, int, int]] = []  # (name, packing, orig_size, data_size)
-
-    while pos < len(raw):
-        null = raw.find(b"\x00", pos)
-        if null < 0 or null + 21 > len(raw):
-            break
-        name = raw[pos:null].decode("latin-1", errors="replace")
-        pos = null + 1
-
-        packing, orig_size, _res, _ts, data_size = struct.unpack_from("<5I", raw, pos)
-        pos += 20
-
-        # Version entry: пустое имя + magic → пропускаем extended props
-        if name == "" and packing == VERS_MAGIC:
-            while pos < len(raw):
-                end = raw.find(b"\x00", pos)
-                if end < 0:
-                    return None
-                key = raw[pos:end].decode("latin-1", errors="replace")
-                pos = end + 1
-                if key == "":
-                    break
-                end = raw.find(b"\x00", pos)
-                if end < 0:
-                    return None
-                pos = end + 1
-            continue
-
-        # Boundary entry
-        if name == "" and data_size == 0:
-            break
-
-        if name:
-            entries.append((name, packing, orig_size, data_size))
-
-    # pos теперь указывает на начало данных файлов
-    offset = pos
-    for name, packing, orig_size, data_size in entries:
-        basename = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if basename == "log.txt":
-            chunk = raw[offset: offset + data_size]
-            if packing == CPRS_MAGIC:
-                chunk = _lzss_decompress(chunk, orig_size)
-            out_path = os.path.join(output_dir, "log.txt")
-            with open(out_path, "wb") as f:
-                f.write(chunk)
-            return out_path
-        offset += data_size
-
-    return None
-
-
 # ── Скачивание и распаковка ───────────────────────────────────────────────────
 
 def _extract_log(archive_path: str, dest_dir: str) -> str | None:
     """
     Извлекает log.txt из .pbo.7z:
       1. Распаковываем .pbo из .7z
-      2. Извлекаем log.txt из .pbo
+      2. armake2 unpack распаковывает .pbo → папка
+      3. Находим log.txt в распакованном содержимом
     """
     with py7zr.SevenZipFile(archive_path, mode="r") as z:
         names = z.getnames()
@@ -238,15 +121,36 @@ def _extract_log(archive_path: str, dest_dir: str) -> str | None:
     if not os.path.exists(pbo_path):
         return None
 
-    log_path = _extract_log_from_pbo(pbo_path, dest_dir)
+    unpack_dir = os.path.join(dest_dir, "unpacked")
+    os.makedirs(unpack_dir, exist_ok=True)
 
-    # Удаляем .pbo — больше не нужен
-    os.unlink(pbo_path)
+    try:
+        result = subprocess.run(
+            ["armake2", "unpack", pbo_path, unpack_dir],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"    armake2 ошибка: {e.stderr.strip()}")
+        return None
+    except FileNotFoundError:
+        print("    armake2 не найден — установите его перед запуском")
+        return None
+    finally:
+        os.unlink(pbo_path)
 
-    if not log_path:
-        print(f"    log.txt не найден внутри .pbo")
+    # log.txt может лежать в корне или в поддиректории PBO
+    for root, _, files in os.walk(unpack_dir):
+        for fname in files:
+            if fname.lower() == "log.txt":
+                src = os.path.join(root, fname)
+                dst = os.path.join(dest_dir, "log.txt")
+                os.rename(src, dst)
+                return dst
 
-    return log_path
+    print("    log.txt не найден внутри .pbo")
+    return None
 
 
 def download_archive(filename: str, dest_dir: str) -> str | None:
