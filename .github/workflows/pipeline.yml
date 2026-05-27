@@ -1,8 +1,17 @@
 name: TSGstats Pipeline
 
 on:
-  # Запуск вручную из GitHub UI
+  # Ручной запуск с параметрами
   workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Обрабатывать архивы за последние N дней'
+        required: false
+        default: '7'
+      max_per_run:
+        description: 'Максимум архивов за один запуск'
+        required: false
+        default: '20'
 
   # Автоматически каждые 2 часа
   schedule:
@@ -30,4 +39,6 @@ jobs:
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DAYS_BACK:            ${{ github.event.inputs.days_back || '7' }}
+          MAX_PER_RUN:          ${{ github.event.inputs.max_per_run || '20' }}
         run: python pipeline.py
