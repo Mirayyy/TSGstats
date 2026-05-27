@@ -32,11 +32,24 @@ if os.path.exists(_env_path):
                 os.environ.setdefault(_k.strip(), _v.strip())
 
 
+# ── Global JSON error handler ─────────────────────────────────────────────────
+
+@app.errorhandler(Exception)
+def handle_error(e):
+    import traceback
+    return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def _sb_client() -> tuple[str, dict]:
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        raise RuntimeError(
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY не заданы. "
+            "Создайте .env файл рядом с admin.py."
+        )
     headers = {
         "apikey": key,
         "Authorization": f"Bearer {key}",
@@ -44,6 +57,16 @@ def _sb_client() -> tuple[str, dict]:
         "Prefer": "return=representation",
     }
     return url, headers
+
+
+def _sb_raise(resp) -> None:
+    """Выбрасывает ошибку с телом ответа от Supabase если статус >= 400."""
+    if resp.status_code >= 400:
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text
+        raise RuntimeError(f"Supabase {resp.status_code}: {body}")
 
 
 # ── API: archives ─────────────────────────────────────────────────────────────
@@ -88,7 +111,7 @@ def api_games():
             "order": "played_at.desc",
             "limit": "200",
         })
-        resp.raise_for_status()
+        _sb_raise(resp)
     return jsonify(resp.json())
 
 
@@ -104,8 +127,8 @@ def api_game_detail(game_id):
             "select":  "kills,deaths,teamkills,suicides,steam_id,players(display_name)",
             "order":   "kills.desc",
         })
-    game_resp.raise_for_status()
-    stats_resp.raise_for_status()
+    _sb_raise(game_resp)
+    _sb_raise(stats_resp)
     games = game_resp.json()
     return jsonify({
         "game":  games[0] if games else None,
@@ -119,7 +142,7 @@ def api_delete_game(game_id):
     with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
         # CASCADE в схеме удалит player_game_stats автоматически
         resp = client.delete("/rest/v1/games", params={"id": f"eq.{game_id}"})
-        resp.raise_for_status()
+        _sb_raise(resp)
     return jsonify({"ok": True})
 
 
@@ -134,7 +157,7 @@ def api_processed():
             "order":  "processed_at.desc",
             "limit":  "200",
         })
-        resp.raise_for_status()
+        _sb_raise(resp)
     return jsonify(resp.json())
 
 
@@ -144,7 +167,7 @@ def api_delete_errors():
     with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
         resp = client.delete("/rest/v1/processed_replays",
                              params={"status": "eq.error"})
-        resp.raise_for_status()
+        _sb_raise(resp)
     return jsonify({"ok": True})
 
 
@@ -154,7 +177,7 @@ def api_delete_processed(filename):
     with httpx.Client(base_url=url, headers=headers, timeout=10) as client:
         resp = client.delete("/rest/v1/processed_replays",
                              params={"filename": f"eq.{filename}"})
-        resp.raise_for_status()
+        _sb_raise(resp)
     return jsonify({"ok": True})
 
 
@@ -535,7 +558,13 @@ function showTab(tab) {
 async function loadArchives() {
   document.getElementById('content').innerHTML = '<div class="loading">Загружаем список с сайта…</div>';
   const r = await fetch('/api/archives');
-  allArchives = await r.json();
+  const data = await r.json();
+  if (!r.ok) {
+    document.getElementById('content').innerHTML =
+      `<div class="empty" style="color:var(--red)">Ошибка: ${data.error || r.status}</div>`;
+    return;
+  }
+  allArchives = data;
   renderArchives();
 }
 
@@ -617,7 +646,13 @@ async function removePending(filename) {
 async function loadGames() {
   document.getElementById('content').innerHTML = '<div class="loading">Загружаем игры…</div>';
   const r = await fetch('/api/games');
-  allGames = await r.json();
+  const data = await r.json();
+  if (!r.ok) {
+    document.getElementById('content').innerHTML =
+      `<div class="empty" style="color:var(--red)">Ошибка: ${data.error || r.status}</div>`;
+    return;
+  }
+  allGames = data;
   renderGames();
 }
 
@@ -719,6 +754,11 @@ async function loadProcessed() {
   document.getElementById('content').innerHTML = '<div class="loading">Загружаем…</div>';
   const r = await fetch('/api/processed');
   const data = await r.json();
+  if (!r.ok) {
+    document.getElementById('content').innerHTML =
+      `<div class="empty" style="color:var(--red)">Ошибка: ${data.error || r.status}</div>`;
+    return;
+  }
 
   const ok  = data.filter(p=>p.status==='ok').length;
   const err = data.filter(p=>p.status==='error').length;
