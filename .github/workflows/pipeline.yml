@@ -32,24 +32,8 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/armake2
-          key: cargo-armake2-${{ runner.os }}
-
-      - name: Install armake2
-        run: |
-          if ! command -v armake2 &>/dev/null; then
-            cargo install armake2
-          fi
-          armake2 --version
 
       - name: Run pipeline
         env:
