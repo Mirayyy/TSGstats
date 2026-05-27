@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSGstats</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d1117;
+            color: #e6edf3;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            min-height: 100vh;
+        }
+
+        /* ── Nav ─────────────────────────────────────────────────────────── */
+        nav {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            height: 52px;
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .nav-brand {
+            font-size: 16px;
+            font-weight: 700;
+            color: #58a6ff;
+            cursor: pointer;
+            margin-right: 16px;
+            user-select: none;
+        }
+        .nav-link {
+            color: #8b949e;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: color .15s, background .15s;
+            user-select: none;
+        }
+        .nav-link:hover { color: #e6edf3; background: #21262d; }
+        .nav-link.active { color: #e6edf3; background: #21262d; }
+
+        /* ── Layout ──────────────────────────────────────────────────────── */
+        main {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        /* ── Typography ──────────────────────────────────────────────────── */
+        h1 { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+        h2 { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: #8b949e; }
+
+        /* ── Tables ──────────────────────────────────────────────────────── */
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        thead th {
+            background: #21262d;
+            padding: 10px 14px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: #8b949e;
+            border-bottom: 1px solid #30363d;
+            white-space: nowrap;
+        }
+        th.r, td.r { text-align: right; }
+        tbody td {
+            padding: 9px 14px;
+            border-bottom: 1px solid #21262d;
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr.row:hover td { background: #1c2128; cursor: pointer; }
+
+        /* ── Links ───────────────────────────────────────────────────────── */
+        .lnk { color: #58a6ff; cursor: pointer; }
+        .lnk:hover { text-decoration: underline; }
+        .dim { color: #8b949e; }
+        .tag { color: #8b949e; }
+
+        /* ── Rank ────────────────────────────────────────────────────────── */
+        .rank { display: inline-block; width: 22px; text-align: center; font-weight: 700; color: #8b949e; }
+        .r1 { color: #ffd700; }
+        .r2 { color: #c0c0c0; }
+        .r3 { color: #cd7f32; }
+
+        /* ── K/D colours ─────────────────────────────────────────────────── */
+        .kd-hi  { color: #3fb950; font-weight: 600; }
+        .kd-mid { color: #e3b341; }
+        .kd-lo  { color: #8b949e; }
+
+        /* ── Stat cards ──────────────────────────────────────────────────── */
+        .stats-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 28px;
+        }
+        .stat {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 14px 20px;
+            min-width: 100px;
+            text-align: center;
+        }
+        .stat-val { font-size: 26px; font-weight: 700; color: #58a6ff; }
+        .stat-lbl { font-size: 11px; text-transform: uppercase; color: #8b949e; margin-top: 3px; letter-spacing: .5px; }
+
+        /* ── Back button ─────────────────────────────────────────────────── */
+        .back { color: #8b949e; cursor: pointer; margin-bottom: 18px; display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+        .back:hover { color: #e6edf3; }
+
+        /* ── Pill ────────────────────────────────────────────────────────── */
+        .pill {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #21262d;
+            color: #8b949e;
+            text-decoration: none;
+        }
+        .pill:hover { background: #30363d; color: #e6edf3; }
+
+        /* ── States ──────────────────────────────────────────────────────── */
+        .loading { text-align: center; padding: 80px; color: #8b949e; }
+        .error   { padding: 40px; color: #f85149; }
+        .empty   { padding: 40px; text-align: center; color: #8b949e; }
+
+        /* ── Player name ─────────────────────────────────────────────────── */
+        .player-head { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+        .player-name { font-size: 22px; font-weight: 700; }
+    </style>
+</head>
+<body>
+
+<nav>
+    <span class="nav-brand" onclick="go('leaderboard')">&#9876; TSGstats</span>
+    <span class="nav-link" id="nl-leaderboard" onclick="go('leaderboard')">Лидерборд</span>
+    <span class="nav-link" id="nl-games"       onclick="go('games')">Игры</span>
+</nav>
+
+<main id="app"><div class="loading">Загрузка...</div></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const URL_  = 'https://ryxsllbkjawliymjasmt.supabase.co';
+const ANON  = 'sb_publishable_nF44ODM9HjUKih1uZ4V7oQ_3cKyYSHJ';
+const db    = supabase.createClient(URL_, ANON);
+
+// ── Router ────────────────────────────────────────────────────────────────────
+function go(page, param) {
+    location.hash = param ? `#${page}/${encodeURIComponent(param)}` : `#${page}`;
+}
+
+window.addEventListener('hashchange', route);
+window.addEventListener('load', route);
+
+function route() {
+    const raw   = location.hash.slice(1) || 'leaderboard';
+    const slash = raw.indexOf('/');
+    const page  = slash === -1 ? raw : raw.slice(0, slash);
+    const param = slash === -1 ? null : decodeURIComponent(raw.slice(slash + 1));
+
+    document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+    const navEl = document.getElementById(`nl-${page}`);
+    if (navEl) navEl.classList.add('active');
+
+    setContent('<div class="loading">Загрузка...</div>');
+
+    if      (page === 'leaderboard')        renderLeaderboard();
+    else if (page === 'games')              renderGames();
+    else if (page === 'game'  && param)     renderGame(param);
+    else if (page === 'player' && param)    renderPlayer(param);
+    else                                    renderLeaderboard();
+}
+
+function setContent(html) { document.getElementById('app').innerHTML = html; }
+
+// ── Leaderboard ───────────────────────────────────────────────────────────────
+async function renderLeaderboard() {
+    const { data, error } = await db
+        .from('leaderboard')
+        .select('*')
+        .order('total_kills', { ascending: false })
+        .limit(200);
+
+    if (error) return setContent(err(error));
+
+    const rows = data.map((p, i) => {
+        const n     = i + 1;
+        const rc    = n <= 3 ? `r${n}` : '';
+        const kd    = p.kd_ratio ?? 0;
+        const kdc   = kdClass(kd);
+        const [tag, name] = splitTag(p.display_name);
+        return `<tr class="row" onclick="go('player','${p.steam_id}')">
+            <td><span class="rank ${rc}">${n}</span></td>
+            <td><span class="lnk"><span class="tag">${esc(tag)}</span>${esc(name)}</span></td>
+            <td class="r dim">${p.games_played}</td>
+            <td class="r" style="color:#e6edf3;font-weight:600">${p.total_kills}</td>
+            <td class="r dim">${p.total_deaths}</td>
+            <td class="r"><span class="${kdc}">${fmtKd(kd)}</span></td>
+            <td class="r dim">${p.total_teamkills}</td>
+        </tr>`;
+    }).join('');
+
+    setContent(`
+        <h1>Лидерборд</h1>
+        <div class="card"><table>
+            <thead><tr>
+                <th>#</th><th>Игрок</th>
+                <th class="r">Игр</th><th class="r">Убийства</th>
+                <th class="r">Смерти</th><th class="r">K/D</th><th class="r">TK</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="7" class="empty">Нет данных</td></tr>'}</tbody>
+        </table></div>`);
+}
+
+// ── Games List ────────────────────────────────────────────────────────────────
+async function renderGames() {
+    const { data, error } = await db
+        .from('games')
+        .select('*')
+        .order('played_at', { ascending: false })
+        .limit(100);
+
+    if (error) return setContent(err(error));
+
+    const rows = data.map(g => {
+        const dt  = fmtDate(g.played_at);
+        const dur = fmtDur(g.duration_sec);
+        return `<tr class="row" onclick="go('game','${esc(g.id)}')">
+            <td class="dim">${dt}</td>
+            <td><span class="lnk">${esc(g.map)}</span></td>
+            <td class="dim">${esc(g.mission)}</td>
+            <td class="r dim">${esc(g.server)}</td>
+            <td class="r dim">${g.player_count}</td>
+            <td class="r dim">${dur}</td>
+        </tr>`;
+    }).join('');
+
+    setContent(`
+        <h1>История игр</h1>
+        <div class="card"><table>
+            <thead><tr>
+                <th>Дата</th><th>Карта</th><th>Миссия</th>
+                <th class="r">Сервер</th><th class="r">Игроков</th><th class="r">Длина</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="6" class="empty">Нет данных</td></tr>'}</tbody>
+        </table></div>`);
+}
+
+// ── Game Detail ───────────────────────────────────────────────────────────────
+async function renderGame(gameId) {
+    const [gRes, sRes] = await Promise.all([
+        db.from('games').select('*').eq('id', gameId).single(),
+        db.from('player_game_stats')
+            .select('*, players(display_name)')
+            .eq('game_id', gameId)
+            .order('kills', { ascending: false })
+    ]);
+
+    if (gRes.error) return setContent(err(gRes.error));
+
+    const g = gRes.data;
+    const s = sRes.data ?? [];
+    const totalK = s.reduce((a, p) => a + p.kills, 0);
+
+    const rows = s.map(p => {
+        const name = p.players?.display_name ?? p.steam_id;
+        const [tag, nm] = splitTag(name);
+        const kd  = p.deaths > 0 ? p.kills / p.deaths : p.kills > 0 ? Infinity : 0;
+        const kdc = kdClass(kd);
+        return `<tr class="row" onclick="go('player','${p.steam_id}')">
+            <td><span class="lnk"><span class="tag">${esc(tag)}</span>${esc(nm)}</span></td>
+            <td class="r" style="font-weight:600">${p.kills}</td>
+            <td class="r dim">${p.deaths}</td>
+            <td class="r"><span class="${kdc}">${fmtKd(kd)}</span></td>
+            <td class="r dim">${p.teamkills}</td>
+            <td class="r dim">${p.suicides}</td>
+        </tr>`;
+    }).join('');
+
+    setContent(`
+        <div class="back" onclick="go('games')">&#8592; Все игры</div>
+        <h1>${esc(g.map)} <span class="dim" style="font-size:14px;font-weight:400">${esc(g.mission)}</span></h1>
+        <div class="stats-row">
+            <div class="stat"><div class="stat-val">${fmtDate(g.played_at, true)}</div><div class="stat-lbl">Дата</div></div>
+            <div class="stat"><div class="stat-val">${esc(g.server)}</div><div class="stat-lbl">Сервер</div></div>
+            <div class="stat"><div class="stat-val">${g.player_count}</div><div class="stat-lbl">Игроков</div></div>
+            <div class="stat"><div class="stat-val">${totalK}</div><div class="stat-lbl">Убийств</div></div>
+            <div class="stat"><div class="stat-val">${fmtDur(g.duration_sec)}</div><div class="stat-lbl">Длина</div></div>
+        </div>
+        <div class="card"><table>
+            <thead><tr>
+                <th>Игрок</th>
+                <th class="r">K</th><th class="r">D</th><th class="r">K/D</th>
+                <th class="r">TK</th><th class="r">S</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="6" class="empty">Нет данных</td></tr>'}</tbody>
+        </table></div>`);
+}
+
+// ── Player Profile ────────────────────────────────────────────────────────────
+async function renderPlayer(steamId) {
+    const [pRes, sRes] = await Promise.all([
+        db.from('players').select('*').eq('steam_id', steamId).single(),
+        db.from('player_game_stats')
+            .select('*, games(played_at, map, mission, server)')
+            .eq('steam_id', steamId)
+            .order('game_id', { ascending: false })
+    ]);
+
+    if (pRes.error) return setContent(err(pRes.error));
+
+    const player = pRes.data;
+    const games  = sRes.data ?? [];
+
+    const totK   = games.reduce((a, p) => a + p.kills, 0);
+    const totD   = games.reduce((a, p) => a + p.deaths, 0);
+    const totTK  = games.reduce((a, p) => a + p.teamkills, 0);
+    const kd     = totD > 0 ? totK / totD : totK > 0 ? Infinity : 0;
+    const kdc    = kdClass(kd);
+    const [tag, name] = splitTag(player.display_name);
+
+    const rows = games.map(p => {
+        const g   = p.games;
+        if (!g) return '';
+        const kd  = p.deaths > 0 ? p.kills / p.deaths : p.kills > 0 ? Infinity : 0;
+        const kdc = kdClass(kd);
+        return `<tr class="row" onclick="go('game','${esc(p.game_id)}')">
+            <td class="dim">${fmtDate(g.played_at, true)}</td>
+            <td><span class="lnk">${esc(g.map)}</span></td>
+            <td class="r dim">${esc(g.server)}</td>
+            <td class="r" style="font-weight:600">${p.kills}</td>
+            <td class="r dim">${p.deaths}</td>
+            <td class="r"><span class="${kdc}">${fmtKd(kd)}</span></td>
+            <td class="r dim">${p.teamkills}</td>
+        </tr>`;
+    }).join('');
+
+    setContent(`
+        <div class="back" onclick="history.back()">&#8592; Назад</div>
+        <div class="player-head">
+            <span class="player-name"><span class="tag">${esc(tag)}</span>${esc(name)}</span>
+            <a href="https://steamcommunity.com/profiles/${steamId}" target="_blank" class="pill">Steam &#8599;</a>
+        </div>
+        <div class="stats-row">
+            <div class="stat"><div class="stat-val">${games.length}</div><div class="stat-lbl">Игр</div></div>
+            <div class="stat"><div class="stat-val">${totK}</div><div class="stat-lbl">Убийства</div></div>
+            <div class="stat"><div class="stat-val">${totD}</div><div class="stat-lbl">Смерти</div></div>
+            <div class="stat"><div class="stat-val"><span class="${kdc}">${fmtKd(kd)}</span></div><div class="stat-lbl">K/D</div></div>
+            <div class="stat"><div class="stat-val">${totTK}</div><div class="stat-lbl">TK</div></div>
+        </div>
+        <h2>История игр</h2>
+        <div class="card"><table>
+            <thead><tr>
+                <th>Дата</th><th>Карта</th><th class="r">Сервер</th>
+                <th class="r">K</th><th class="r">D</th><th class="r">K/D</th><th class="r">TK</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="7" class="empty">Нет данных</td></tr>'}</tbody>
+        </table></div>`);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function splitTag(name) {
+    const m = String(name).match(/^(\[.*?\])(.*)/);
+    return m ? [m[1], m[2]] : ['', String(name)];
+}
+
+function kdClass(kd) {
+    if (!isFinite(kd)) return 'kd-hi';
+    return kd >= 1.5 ? 'kd-hi' : kd >= 0.8 ? 'kd-mid' : 'kd-lo';
+}
+
+function fmtKd(kd) {
+    if (!isFinite(kd) || kd === null) return kd > 0 ? '&infin;' : '&mdash;';
+    return Number(kd).toFixed(2);
+}
+
+function fmtDate(iso, short) {
+    const d = new Date(iso);
+    if (short) return d.toLocaleDateString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric' });
+    return d.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+function fmtDur(sec) {
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function esc(s) {
+    return String(s ?? '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function err(e) {
+    return `<div class="error">Ошибка: ${esc(e?.message ?? String(e))}</div>`;
+}
+</script>
+</body>
+</html>

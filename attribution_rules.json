@@ -1,0 +1,4 @@
+{
+  "vehicle_damage_window_sec": 5,
+  "min_confidence_for_stats": 0.5
+}

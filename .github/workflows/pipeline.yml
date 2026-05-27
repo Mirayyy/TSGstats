@@ -1,0 +1,33 @@
+name: TSGstats Pipeline
+
+on:
+  # Запуск вручную из GitHub UI
+  workflow_dispatch:
+
+  # Автоматически каждые 2 часа
+  schedule:
+    - cron: '0 */2 * * *'
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python pipeline.py

@@ -1,0 +1,8 @@
+[
+  {
+    "from": "2026-05-20",
+    "to": null,
+    "parser": "v1",
+    "note": "Текущий формат: Event 2 с name, Event 4/5 с weapon_classname раздельно"
+  }
+]
