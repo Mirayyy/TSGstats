@@ -49,19 +49,26 @@ def get_parser_version(timestamp_str: str) -> str:
 
 # ─── Загрузка файла ───────────────────────────────────────────────────────────
 
+# SQF-токены, невалидные в JSON: any, nil, objNull, grpNull и т.д.
+# Lookbehind/lookahead (?<!["\w]) / (?!["\w]) исключает совпадения
+# внутри строк ("any") и составных имён ("any_weapon", "company").
+_SQF_NULL_RE = re.compile(
+    r'(?<!["\w])(any|nil|objNull|grpNull|teamMemberNull|configNull|scriptNull)(?!["\w])'
+)
+
+
 def preprocess(text: str) -> str:
     """Исправляет известные дефекты JSON до парсинга."""
     text = text.replace("-1.#IND", "null")
     text = text.replace("-1.#INF", "null")
     text = text.replace("1.#INF", "null")
-    # ArmA/SQF keyword `any` (неизвестное значение) — заменяем на null
-    # Используем \b чтобы не затронуть строки типа "company", "any_weapon"
-    text = re.sub(r'\bany\b', 'null', text)
+    text = _SQF_NULL_RE.sub("null", text)
     # Обрезаем мусор после последней закрывающей скобки
     last = text.rfind("]")
     if last != -1:
         text = text[: last + 1]
     return text
+
 
 def load_log(path: str) -> list:
     """Загружает log.txt с перебором кодировок."""
@@ -72,6 +79,20 @@ def load_log(path: str) -> list:
             return json.loads(preprocess(text))
         except json.JSONDecodeError:
             continue
+
+    # Диагностика: показываем начало файла чтобы понять причину сбоя
+    try:
+        with open(path, "rb") as f:
+            head = f.read(400)
+        is_binary = sum(1 for b in head[:100] if b < 0x09 or 0x0E <= b <= 0x1F) > 3
+        if is_binary:
+            print(f"  ! Файл выглядит как бинарный (armake2 не распаковал?): {head[:80]!r}")
+        else:
+            snippet = head.decode("latin-1", errors="replace")
+            print(f"  ! Начало файла (первые 300 символов):\n    {snippet[:300]!r}")
+    except Exception:
+        pass
+
     raise ValueError(f"Не удалось распарсить JSON: {path}")
 
 
