@@ -79,7 +79,8 @@ def get_processed_files() -> set[str]:
         return set()
 
 
-def mark_processed(filename: str) -> None:
+def mark_processed(filename: str, status: str = "ok") -> None:
+    """Отмечает архив как обработанный. status = 'ok' | 'error'."""
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     if not url:
         return
@@ -87,7 +88,11 @@ def mark_processed(filename: str) -> None:
         with httpx.Client(base_url=url, headers=_sb_headers(), timeout=10) as client:
             client.post(
                 "/rest/v1/processed_replays",
-                json={"filename": filename, "processed_at": datetime.now(timezone.utc).isoformat()},
+                json={
+                    "filename":     filename,
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                    "status":       status,
+                },
                 headers={"Prefer": "resolution=merge-duplicates"},
             )
     except Exception as e:

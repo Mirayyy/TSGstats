@@ -53,9 +53,12 @@ def run() -> None:
         for archive_name, log_path in replays:
             print(f"\n--- {archive_name} ---")
             if process_one(archive_name, log_path):
-                mark_processed(archive_name)
+                mark_processed(archive_name, status="ok")
                 ok += 1
             else:
+                # Помечаем как обработанный даже при ошибке —
+                # сломанный архив будет сломан всегда, не стоит ретраить.
+                mark_processed(archive_name, status="error")
                 fail += 1
 
     print(f"\n{'='*60}")
