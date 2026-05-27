@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict
 from datetime import datetime
@@ -53,6 +54,9 @@ def preprocess(text: str) -> str:
     text = text.replace("-1.#IND", "null")
     text = text.replace("-1.#INF", "null")
     text = text.replace("1.#INF", "null")
+    # ArmA/SQF keyword `any` (неизвестное значение) — заменяем на null
+    # Используем \b чтобы не затронуть строки типа "company", "any_weapon"
+    text = re.sub(r'\bany\b', 'null', text)
     # Обрезаем мусор после последней закрывающей скобки
     last = text.rfind("]")
     if last != -1:
