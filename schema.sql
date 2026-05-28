@@ -69,14 +69,13 @@ ALTER TABLE player_game_stats ENABLE ROW LEVEL SECURITY;
 -- processed_replays без публичных политик — анонимный доступ заблокирован
 ALTER TABLE processed_replays ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS "public read games"
-    ON games FOR SELECT USING (true);
+DROP POLICY IF EXISTS "public read games"   ON games;
+DROP POLICY IF EXISTS "public read players" ON players;
+DROP POLICY IF EXISTS "public read stats"   ON player_game_stats;
 
-CREATE POLICY IF NOT EXISTS "public read players"
-    ON players FOR SELECT USING (true);
-
-CREATE POLICY IF NOT EXISTS "public read stats"
-    ON player_game_stats FOR SELECT USING (true);
+CREATE POLICY "public read games"   ON games             FOR SELECT USING (true);
+CREATE POLICY "public read players" ON players           FOR SELECT USING (true);
+CREATE POLICY "public read stats"   ON player_game_stats FOR SELECT USING (true);
 
 -- ── GRANT ─────────────────────────────────────────────────────────────────────
 -- Публичные таблицы — читает anon (фронтенд через Supabase JS SDK)
