@@ -63,26 +63,28 @@ def process_one(archive_name: str, log_path: str, server: str = "") -> bool:
 
     try:
         parse(log_path, work_dir, server=server)
+        resolve(work_dir, work_dir)
+        attribute(work_dir, work_dir)
+        calculate(work_dir, work_dir)
 
-        # ── Фильтр по реальным игрокам (после parse, т.к. данные в meta.json) ──
+        # ── Фильтр по реальным игрокам (после calculate, данные в game_stats.json) ──
+        # meta.json не содержит player_count — реальный состав известен только после
+        # полной обработки. Используем len(players) — тот же источник, что supabase_writer.
         _min_pl_raw = os.environ.get("FILTER_MIN_PLAYERS", "").strip()
         if _min_pl_raw.isdigit():
             _min_pl = int(_min_pl_raw)
             if _min_pl > 0:
                 try:
-                    with open(os.path.join(work_dir, "meta.json"), encoding="utf-8") as _f:
-                        _meta = json.load(_f)
-                    _actual = _meta.get("player_count", 0)
+                    with open(os.path.join(work_dir, "game_stats.json"), encoding="utf-8") as _f:
+                        _gs = json.load(_f)
+                    _actual = len(_gs.get("players", []))
                     if _actual < _min_pl:
                         print(f"  Пропускаем: {_actual} реальных игроков < "
                               f"минимум {_min_pl}. Архив помечен как обработанный.")
                         return True   # не ошибка — просто пропуск
                 except Exception as _e:
-                    print(f"  WARNING: не удалось прочитать player_count из meta.json: {_e}")
+                    print(f"  WARNING: не удалось прочитать player_count из game_stats.json: {_e}")
 
-        resolve(work_dir, work_dir)
-        attribute(work_dir, work_dir)
-        calculate(work_dir, work_dir)
         write(work_dir)
         return True
     except Exception as e:
