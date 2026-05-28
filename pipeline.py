@@ -21,10 +21,11 @@ TSGstats — Pipeline Orchestrator
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 from downloader import get_new_replays, mark_processed
 from parser import parse
@@ -56,8 +57,29 @@ def process_one(archive_name: str, log_path: str, server: str = "") -> bool:
     if not server:
         server = _server_from_name(archive_name)
 
+    if not server:
+        print(f"  ПРЕДУПРЕЖДЕНИЕ: не удалось определить сервер из '{archive_name}'. "
+              f"Поле server будет пустым в базе данных.")
+
     try:
         parse(log_path, work_dir, server=server)
+
+        # ── Фильтр по реальным игрокам (после parse, т.к. данные в meta.json) ──
+        _min_pl_raw = os.environ.get("FILTER_MIN_PLAYERS", "").strip()
+        if _min_pl_raw.isdigit():
+            _min_pl = int(_min_pl_raw)
+            if _min_pl > 0:
+                try:
+                    with open(os.path.join(work_dir, "meta.json"), encoding="utf-8") as _f:
+                        _meta = json.load(_f)
+                    _actual = _meta.get("player_count", 0)
+                    if _actual < _min_pl:
+                        print(f"  Пропускаем: {_actual} реальных игроков < "
+                              f"минимум {_min_pl}. Архив помечен как обработанный.")
+                        return True   # не ошибка — просто пропуск
+                except Exception as _e:
+                    print(f"  WARNING: не удалось прочитать player_count из meta.json: {_e}")
+
         resolve(work_dir, work_dir)
         attribute(work_dir, work_dir)
         calculate(work_dir, work_dir)
@@ -71,13 +93,24 @@ def process_one(archive_name: str, log_path: str, server: str = "") -> bool:
 
 # ── Режим 1: стандартный (скачивает новые реплеи) ─────────────────────────────
 
-def run() -> None:
+def run(
+    servers: list[str] | None = None,
+    mission_types: list[str] | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> None:
     print(f"\n{'='*60}")
     print(f"TSGstats Pipeline  —  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")
 
     with tempfile.TemporaryDirectory(prefix="tsgstats_") as tmp:
-        replays = get_new_replays(tmp)
+        replays = get_new_replays(
+            tmp,
+            servers=servers,
+            mission_types=mission_types,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
         if not replays:
             print("\nНовых реплеев нет. Выход.")
@@ -189,7 +222,27 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--server", metavar="NAME", default="",
-        help="Имя сервера (T1/T2/T3), используется с --local если не распознаётся из пути",
+        help="Имя сервера (T1/T2/T3/T4), используется с --local если не распознаётся из пути",
+    )
+    parser.add_argument(
+        "--servers", metavar="T1,T2,...", default="",
+        help="Фильтр по серверу через запятую (T1,T2,...). Пусто = все серверы.",
+    )
+    parser.add_argument(
+        "--types", metavar="mTSG,TSG", default="",
+        help="Фильтр по типу миссии через запятую (mTSG,TSG,...). Пусто = все типы.",
+    )
+    parser.add_argument(
+        "--min-players", metavar="N", type=int, default=0,
+        help="Минимальное кол-во реальных игроков (0 = без ограничения).",
+    )
+    parser.add_argument(
+        "--date-from", metavar="YYYY-MM-DD", default="",
+        help="Обрабатывать архивы не старше этой даты (заменяет --days-back).",
+    )
+    parser.add_argument(
+        "--date-to", metavar="YYYY-MM-DD", default="",
+        help="Обрабатывать архивы не новее этой даты.",
     )
     args = parser.parse_args()
 
@@ -205,4 +258,26 @@ if __name__ == "__main__":
         if missing:
             print(f"ОШИБКА: не заданы переменные окружения: {', '.join(missing)}")
             sys.exit(1)
-        run()
+        servers = [s.strip() for s in args.servers.split(",") if s.strip()] or None
+        types   = [t.strip() for t in args.types.split(",")   if t.strip()] or None
+
+        # min_players — через env (проверяется в process_one() после parse())
+        if args.min_players > 0:
+            os.environ["FILTER_MIN_PLAYERS"] = str(args.min_players)
+
+        # Дата от/до
+        def _parse_arg_date(s: str) -> datetime | None:
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+            except ValueError:
+                print(f"ОШИБКА: неверный формат даты {s!r} (ожидается YYYY-MM-DD)")
+                sys.exit(1)
+
+        run(
+            servers=servers,
+            mission_types=types,
+            date_from=_parse_arg_date(args.date_from),
+            date_to=_parse_arg_date(args.date_to),
+        )

@@ -12,6 +12,26 @@ on:
         description: 'Максимум архивов за один запуск'
         required: false
         default: '20'
+      servers:
+        description: 'Фильтр серверов через запятую (T1,T2,...). Пусто = все серверы.'
+        required: false
+        default: ''
+      mission_types:
+        description: 'Фильтр типов миссий через запятую (mTSG,TSG,...). Пусто = все типы.'
+        required: false
+        default: ''
+      min_players:
+        description: 'Минимальное кол-во игроков (0 = без ограничения)'
+        required: false
+        default: '0'
+      date_from:
+        description: 'Дата от (YYYY-MM-DD). Если задана — заменяет days_back как нижнюю границу.'
+        required: false
+        default: ''
+      date_to:
+        description: 'Дата до (YYYY-MM-DD, включительно). Верхняя граница диапазона.'
+        required: false
+        default: ''
 
   # Автоматически каждые 2 часа
   schedule:
@@ -41,4 +61,9 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           DAYS_BACK:            ${{ github.event.inputs.days_back || '7' }}
           MAX_PER_RUN:          ${{ github.event.inputs.max_per_run || '20' }}
+          FILTER_SERVERS:       ${{ github.event.inputs.servers || '' }}
+          FILTER_TYPES:         ${{ github.event.inputs.mission_types || '' }}
+          FILTER_MIN_PLAYERS:   ${{ github.event.inputs.min_players || '0' }}
+          FILTER_DATE_FROM:     ${{ github.event.inputs.date_from || '' }}
+          FILTER_DATE_TO:       ${{ github.event.inputs.date_to || '' }}
         run: python pipeline.py
